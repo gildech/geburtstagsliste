@@ -10,7 +10,7 @@ def prepare_dataframe(df_raw: pd.DataFrame, target_year: int = 2026) -> pd.DataF
     Wendet die gleiche Logik an wie im Notebook:
     - Datum parsen und nach Monat/Tag sortieren
     - Spalten umbenennen / bereinigen
-    - Alter im Jahr 2026 berechnen
+    - Alter im Zieljahr berechnen
     """
     df = df_raw.copy()
 
@@ -31,11 +31,15 @@ def prepare_dataframe(df_raw: pd.DataFrame, target_year: int = 2026) -> pd.DataF
     # Unnötige Spalten entfernen (falls vorhanden)
     df = df.drop(columns=["Kontakte", "Anredeart"], errors="ignore")
 
-    # Spalten wie im Notebook umbenennen
+    # Spalten wie im Notebook umbenennen / harmonisieren
     rename_map = {
         "Strasse (Korr.)": "Strasse",
         "PLZ (Korr.)": "PLZ",
         "Ort (Korr.)": "Ort",
+        # Korrespondenzsprache-Harmonisierung
+        "Korresp.sprache": "Korrespondenzsprache",
+        "Korresp. Sprache": "Korrespondenzsprache",
+        "Korrespondenz Sprache": "Korrespondenzsprache",
     }
     existing_rename = {k: v for k, v in rename_map.items() if k in df.columns}
     if existing_rename:
@@ -117,6 +121,17 @@ def build_geburtstagsliste_excel(
                         mitgliedschaft_col = mgl_col
                         break
 
+                # Korrespondenzsprache-Spalte robust finden (inkl. abgekürzter Varianten)
+                corr_lang_col = None
+                for col in df_monat.columns:
+                    col_norm = str(col).strip().lower().replace(" ", "")
+                    if col_norm in ("korrespondenzsprache", "korrespsprache"):
+                        corr_lang_col = col
+                        break
+                    if ("korresp" in col_norm or "korrespondenz" in col_norm) and "sprache" in col_norm:
+                        corr_lang_col = col
+                        break
+
                 # Spaltenauswahl wie im Notebook
                 desired_cols = [
                     "Vorname",
@@ -130,11 +145,18 @@ def build_geburtstagsliste_excel(
                 ]
                 if mitgliedschaft_col:
                     desired_cols.append(mitgliedschaft_col)
+                if corr_lang_col:
+                    # Korrespondenzsprache direkt nach Ort
+                    desired_cols.insert(7, corr_lang_col)
 
                 sheet_cols = [c for c in desired_cols if c in df_monat.columns]
-                # Fallback: alle Spalten falls keine der gewünschten da ist
+                # Falls Korrespondenzspalte nicht in desired_cols war, aber existiert, trotzdem anhängen
+                if corr_lang_col and corr_lang_col not in sheet_cols:
+                    sheet_cols.append(corr_lang_col)
+                # Fallback: alle Spalten, falls keine der gewünschten da ist
                 if not sheet_cols:
                     sheet_cols = list(df_monat.columns)
+
                 export_df = df_monat[sheet_cols]
 
                 # In Excel-Sheet schreiben
@@ -196,6 +218,7 @@ def build_geburtstagsliste_excel(
                                 "format": yellow_highlight_format,
                             },
                         )
+
         # Zusätzliches Sheet für Kontakte ohne Geburtsdatum (nach Dezember)
         if include_no_date_sheet and not df_no_date.empty:
             sheet_name = "Ohne_Geburtsdatum"
@@ -209,6 +232,22 @@ def build_geburtstagsliste_excel(
                 "Ort",
                 "Mitgliedschaft",
             ]
+
+            # Korrespondenzsprache-Spalte auch hier robust erkennen
+            corr_lang_col_no_date = None
+            for col in df_no_date.columns:
+                col_norm = str(col).strip().lower().replace(" ", "")
+                if col_norm in ("korrespondenzsprache", "korrespsprache"):
+                    corr_lang_col_no_date = col
+                    break
+                if ("korresp" in col_norm or "korrespondenz" in col_norm) and "sprache" in col_norm:
+                    corr_lang_col_no_date = col
+                    break
+
+            if corr_lang_col_no_date:
+                # nach Ort einfügen
+                desired_cols_no_date.insert(6, corr_lang_col_no_date)
+
             sheet_cols_no_date = [
                 c for c in desired_cols_no_date if c in df_no_date.columns
             ]
@@ -217,7 +256,7 @@ def build_geburtstagsliste_excel(
                 if c not in sheet_cols_no_date:
                     sheet_cols_no_date.append(c)
 
-            # Fallback: mindestens alle Spalten falls Liste am Ende leer ist
+            # Fallback: mindestens alle Spalten, falls Liste am Ende leer ist
             if not sheet_cols_no_date:
                 sheet_cols_no_date = list(df_no_date.columns)
 
@@ -250,9 +289,9 @@ def build_geburtstagsliste_excel(
                         },
                     )
 
-        # Falls keine Monatsdaten vorhanden, mindestens das Ohne_Geburtsdatum-Sheet erzeugen (ggf. auch bei leeren df)
+        # Falls keine Monatsdaten vorhanden, mindestens das Ohne_Geburtsdatum-Sheet
         if df_with_date.empty and (not include_no_date_sheet or df_no_date.empty):
-            # Keine Daten, trotzdem ein leeres Sheet anlegen, damit nicht komplett leere Datei entsteht
+            # Keine Daten, trotzdem ein leeres Sheet anlegen
             empty_df = pd.DataFrame({"Info": ["Keine Daten vorhanden"]})
             empty_df.to_excel(writer, sheet_name="Keine_Daten", index=False)
 
@@ -271,47 +310,128 @@ def build_geburtstagsliste_excel(
 def main():
     st.set_page_config(page_title="Geburtstagsliste 2026", layout="centered")
 
-    # Leicht kompakteres Layout / zentrierter Inhalt
+    # Moderner heller Notion-Style / responsive Cards
     st.markdown(
         """
 <style>
+/* Hintergrund */
+.stApp {
+    background: linear-gradient(180deg, #f9fafb 0%, #f3f4f6 100%);
+    color: #0f172a;
+}
+
+/* Hauptcontainer als helle Card */
 .block-container {
-    padding-top: 1.2rem;
-    padding-bottom: 2rem;
-    max-width: 1100px;
+    padding-top: 2.6rem; /* Abstand unterhalb des Streamlit-Header-Balkens */
+    padding-bottom: 2.2rem;
+    max-width: 1080px;
+    background-color: #ffffff;
+    border-radius: 18px;
+    box-shadow: 0 18px 45px rgba(15, 23, 42, 0.12);
+    border: 1px solid #e5e7eb;
+}
+
+/* Texte */
+h1, h2, h3, h4, h5, h6, p, li, span, label {
+    color: #0f172a !important;
+}
+p, li, span, label {
+    font-size: 16px;
+    line-height: 1.6;
+}
+
+/* Buttons */
+div.stButton > button {
+    border-radius: 12px;
+    padding: 0.65rem 1.5rem;
+    border: 1px solid #e2e8f0;
+    background: #ffffff;
+    color: #0f172a;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    box-shadow: 0 10px 22px rgba(15, 23, 42, 0.06);
+    transition: all 0.18s ease;
+}
+div.stButton > button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 14px 30px rgba(15, 23, 42, 0.12);
+}
+
+/* Download-Button */
+[data-testid="baseButton-secondary"] {
+    border-radius: 12px !important;
+    border: 1px solid #e2e8f0 !important;
+}
+
+/* Info / Alert Boxen */
+.stAlert {
+    background-color: #f8fafc;
+    border-radius: 14px;
+    border: 1px solid #e2e8f0;
+}
+
+/* Tabelle */
+[data-testid="stDataFrame"] {
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid #e5e7eb;
+}
+
+/* Upload Dropzone */
+[data-testid="stFileUploadDropzone"] {
+    border: 2px dashed #cbd5e1;
+    border-radius: 16px;
+    background: #f8fafc;
+}
+
+/* Mobile Responsiveness */
+@media (max-width: 768px) {
+    .block-container {
+        padding: 1rem;
+        border-radius: 12px;
+    }
+    .stMarkdown h2, .stMarkdown h3 {
+        font-size: 1.2rem;
+    }
+    div.stButton > button {
+        width: 100%;
+    }
 }
 </style>
 """,
         unsafe_allow_html=True,
     )
 
-    # Sidebar-Einstellungen (App-Feeling)
-    st.sidebar.header("Einstellungen")
-    target_year = st.sidebar.number_input(
-        "Zieljahr für Geburtstagsliste",
-        min_value=1900,
-        max_value=2100,
-        value=2026,
-        step=1,
-    )
-    include_no_date_sheet = st.sidebar.checkbox(
-        "Zusätzliches Blatt für Einträge ohne Geburtsdatum erstellen",
-        value=True,
-    )
-    only_active = st.sidebar.checkbox(
-        "Nur aktive Mitglieder (Mitgliedschaft enthält 'Aktiv')",
-        value=False,
-    )
-
-    # Logo zentriert
-    logo_cols = st.columns([1, 2, 1])
+    # Logo dezent zentriert
+    logo_cols = st.columns([1, 1, 1])
     with logo_cols[1]:
         try:
-            st.image("Gilde-Brandlogo-Petrol.jpg", use_container_width=True)
+            st.image("Gilde-Brandlogo-Petrol.jpg", width=220)
         except Exception:
             st.write(" ")
 
-    st.markdown("### Geburtstagsliste 2026 Generator")
+    # Einstellungen ohne Sidebar (responsive Controls)
+    st.markdown("### Einstellungen")
+    ctrl_cols = st.columns([1, 1])
+    with ctrl_cols[0]:
+        target_year = st.number_input(
+            "Zieljahr für Geburtstagsliste",
+            min_value=1900,
+            max_value=2100,
+            value=2026,
+            step=1,
+        )
+    with ctrl_cols[1]:
+        include_no_date_sheet = st.checkbox(
+            "Blatt für Einträge ohne Geburtsdatum hinzufügen",
+            value=True,
+        )
+
+    st.markdown("## 🎂 Geburtstagsliste Generator")
+    st.caption(
+        "Automatischer Excel-Export aus Fairgate – mit runden Geburtstagen und Ehrenmitgliedern hervorgehoben."
+    )
+
     st.markdown(
         """
 **Schritt 1 – Export aus Fairgate**
@@ -321,7 +441,7 @@ def main():
 3. Klicke oben rechts auf die **drei Balken (Menü)** und dann auf **„Exportieren“**.
 4. Unter **„Gespeicherte Spalteneinstellungen“** wähle **„Geburtstagstabelle“** und lade die Excel-Datei herunter.
 
-**Schritt 2 – Geburtstagsliste 2026 erzeugen**
+**Schritt 2 – Geburtstagsliste erzeugen**
 
 Lade hier die eben aus Fairgate exportierte Excel-Datei hoch.
 """
@@ -363,12 +483,7 @@ Lade hier die eben aus Fairgate exportierte Excel-Datei hoch.
 
     st.dataframe(df_raw.head(30), use_container_width=True)
 
-    # Optional: nur aktive Mitglieder filtern
-    df_work = df_raw.copy()
-    if only_active and "Mitgliedschaft" in df_work.columns:
-        df_work = df_work[df_work["Mitgliedschaft"].astype(str).str.contains("Aktiv")]
-
-    df_prepared = prepare_dataframe(df_work, target_year=target_year)
+    df_prepared = prepare_dataframe(df_raw.copy(), target_year=target_year)
 
     with st.expander(
         f"Vorschau der aufbereiteten Daten (für {target_year})", expanded=False
@@ -407,4 +522,3 @@ Lade hier die eben aus Fairgate exportierte Excel-Datei hoch.
 
 if __name__ == "__main__":
     main()
-
